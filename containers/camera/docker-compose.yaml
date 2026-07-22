@@ -1,0 +1,20 @@
+services:
+  image-classifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tf_camera
+    restart: "no"
+    environment:
+      - DEBUG_DIR
+    volumes:
+      # Maps the container log directory to a specific host folder
+      # Replace ./host_logs with the actual path on your Raspberry Pi
+      - ./host_logs:/var/log/
+    networks:
+      - classifier-network
+
+networks:
+  classifier-network:
+    external: true
+    name: fruits      

@@ -1,0 +1,12 @@
+[submodule "classifier-server"]
+	path = classifier-server
+	url = git@github.com:avilavictor/classifier-server.git
+[submodule "classifier-training"]
+	path = classifier-training
+	url = git@github.com:avilavictor/classifier-training.git
+[submodule "metrics"]
+	path = metrics
+	url = git@github.com:avilavictor/metrics.git
+[submodule "camera-simulator"]
+	path = camera-simulator
+	url = git@github.com:avilavictor/camera-simulator.git

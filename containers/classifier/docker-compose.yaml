@@ -1,0 +1,22 @@
+services:
+  image-classifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tf_classifier
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    networks:
+      - classifier-network
+    environment:
+      - DEBUG_DIR
+    volumes:
+      # Maps the container log directory to a specific host folder
+      # Replace ./host_logs with the actual path on your Raspberry Pi
+      - ./host_logs:/var/log/
+
+networks:
+  classifier-network:
+    driver: bridge
+    name: fruits

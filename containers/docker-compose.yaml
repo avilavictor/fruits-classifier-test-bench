@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  classifier:
+    build:
+      context: ..
+      dockerfile: containers/classifier/Dockerfile
+    container_name: tf_classifier
+    restart: "no"
+    environment:
+      - LOG_DIR=${CONTAINER_CLASSIFIER_LOG_DIR:-/var/log/}
+      - MODEL_PATH=${CONTAINER_MODEL_PATH:-/app/model.tflite}
+      - SERVER_PORT=${SERVER_PORT:-8000}
+    volumes:
+      - ${HOST_LOGS_DIR:-../logs}:/var/log
+      - ${HOST_MODEL_PATH:-../bin/model.tflite}:/app/model.tflite:ro
+    networks:
+      - fruits
+
+  camera:
+    build:
+      context: ..
+      dockerfile: containers/camera/Dockerfile
+    container_name: tf_camera
+    restart: "no"
+    depends_on:
+      - classifier
+    environment:
+      - LOG_DIR=${CONTAINER_CAMERA_LOG_DIR:-/var/log/}
+      - IMAGE_DATASET_PATH=${CONTAINER_DATASET_PATH:-/data/test_mixed}
+      - SERVER_URL=${CONTAINER_SERVER_URL:-http://classifier:8000/upload}
+      - SEND_INTERVAL_MS=${SEND_INTERVAL_MS:-200}
+    volumes:
+      - ${HOST_LOGS_DIR:-../logs}:/var/log
+      - ${HOST_DATASET_PATH:-../bin/dataset/test_mixed}:/data/test_mixed:ro
+    networks:
+      - fruits
+
+networks:
+  fruits:
+    driver: bridge

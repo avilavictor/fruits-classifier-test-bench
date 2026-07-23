@@ -16,7 +16,7 @@ Top-level folders:
 
 Each module has its own `README.md` with detailed usage and configuration instructions.
 
-## General build instructions
+### General build instructions
 
 From the repository root:
 
@@ -29,13 +29,22 @@ cmake --build .
 
 This generates binaries under `build/bin` and/or `bin`, depending on the module build configuration.
 
-## General run guidance
+### General run guidance
 
 - `config.sh` - configuration file with all needed paths and configurations
 - `monitor.sh` - Script that runs the test bench according with configuration file.
 
-## Notes
+### Notes
 
 - The root README is intentionally high level and focuses on repository organization and main entry points.
 - See each module's own README for full details on compilation, execution, and expected inputs.
 
+## Test bench overview
+
+### Hardware
+
+A Raspberry Pi 4B with 2GB of RAM was used for testing
+
+### OS
+
+All tests were run on a customized DietPi (a Debian Trixie based) distro. UART and wifi options were disabled in DietPi installation process. All other OS configurations: packages removal, dependencies installations, etc. were done by `iso_config.sh`.

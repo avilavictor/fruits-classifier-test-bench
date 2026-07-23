@@ -1,85 +1,62 @@
 #!/bin/bash
-# install_tflite.sh - Automação de Instalação TensorFlow Lite C API
-# Criado para: Victor Avila (Debian / Raspberry Pi 4)
+# install_tflite.sh - Minimal TensorFlow Lite C API install for Raspberry Pi
+# Builds and installs only the runtime library and the headers needed by classifier-server/classifier.c.
 
-set -e
+set -euo pipefail
 
-echo "-------------------------------------------------------"
-echo " Iniciando Instalação do TensorFlow Lite C (v2.16.1) "
-echo "-------------------------------------------------------"
-
-# Diretório para armazenar o arquivo tar.gz
+TF_VERSION="${1:-2.16.1}"
 OUTPUT_DIR="$PWD/tflite-build"
 mkdir -p "$OUTPUT_DIR"
 
-# 1. Dependências
-echo "[1/7] Instalando dependências do sistema..."
+echo "-------------------------------------------------------"
+echo " Starting TensorFlow Lite C install: v$TF_VERSION "
+echo "-------------------------------------------------------"
+
+echo "[1/7] Installing minimal system dependencies..."
 sudo apt update
-sudo apt install -y cmake git build-essential python3-numpy python3-pip
+sudo apt install -y cmake git build-essential python3 wget tar
 
-# 2. Download e Checkout Estável
-echo "[2/7] Preparando repositório TensorFlow..."
-cd ~
-if [ ! -d "tensorflow" ]; then
-    git clone https://github.com/tensorflow/tensorflow.git
-fi
-cd tensorflow
-git fetch --all --tags
-git checkout v2.16.1
-git submodule update --init --recursive
+WORKDIR="$(mktemp -d)"
+echo "[2/7] Using temporary workspace: $WORKDIR"
+cd "$WORKDIR"
 
-# 3. Configuração CMake
-echo "[3/7] Configurando o CMake (Desativando XNNPACK/GPU)..."
-cd tensorflow/lite/c
+echo "[3/7] Cloning TensorFlow $TF_VERSION source..."
+git clone --depth 1 --branch "v$TF_VERSION" https://github.com/tensorflow/tensorflow.git tensorflow-src
+LITE_SOURCE_DIR="$WORKDIR/tensorflow-src/tensorflow/lite"
+cd "$LITE_SOURCE_DIR/c"
+
+echo "[4/7] Configuring the TensorFlow Lite C build..."
 rm -rf build && mkdir build && cd build
-
-# Desativamos MMAP e XNNPACK para evitar erros de declaração no Debian/ARM
 cmake .. \
+  -DCMAKE_BUILD_TYPE=Release \
   -DTFLITE_ENABLE_XNNPACK=OFF \
   -DTFLITE_ENABLE_GPU=OFF \
   -DTFLITE_ENABLE_MMAP=OFF
 
-# 4. Compilação
-echo "[4/7] Compilando a biblioteca compartilhada..."
-# Limitando a 2 núcleos para preservar a RAM de 2GB do RPi4
-cmake --build . -j2
+echo "[5/7] Building TensorFlow Lite C runtime (single job for low-memory Pi)..."
+cmake --build . --target tensorflowlite_c -- -j1
 
-# 5. Instalação da Lib
-echo "[5/7] Instalando libtensorflowlite_c.so em /usr/local/lib..."
+echo "[6/7] Installing runtime library and headers..."
+sudo mkdir -p /usr/local/lib
+sudo mkdir -p /usr/local/include/tensorflow/lite
 sudo cp libtensorflowlite_c.so /usr/local/lib/
+sudo cp -r "$LITE_SOURCE_DIR"/. /usr/local/include/tensorflow/lite/
 sudo ldconfig
 
-# 6. Instalação dos Headers
-echo "[6/7] Organizando cabeçalhos (.h) em /usr/local/include..."
-sudo mkdir -p /usr/local/include/tensorflow/lite
-cd ~/tensorflow
-sudo cp tensorflow/lite/*.h /usr/local/include/tensorflow/lite/
-sudo cp -r tensorflow/lite/c /usr/local/include/tensorflow/lite/
-sudo cp -r tensorflow/lite/core /usr/local/include/tensorflow/lite/
-
-# 7. Criando arquivo tar.gz com .so e headers
-echo "[7/7] Criando arquivo tar.gz com a biblioteca e cabeçalhos..."
-PACKAGE_DIR=$(mktemp -d)
+echo "[7/7] Packaging runtime and full headers..."
+PACKAGE_DIR="$(mktemp -d)"
 mkdir -p "$PACKAGE_DIR/lib"
-mkdir -p "$PACKAGE_DIR/include"
+mkdir -p "$PACKAGE_DIR/include/tensorflow/lite"
+cp libtensorflowlite_c.so "$PACKAGE_DIR/lib/"
+cp -r "$LITE_SOURCE_DIR"/. "$PACKAGE_DIR/include/tensorflow/lite/"
 
-# Copiar a biblioteca compartilhada
-cp ~/tensorflow/lite/c/build/libtensorflowlite_c.so "$PACKAGE_DIR/lib/"
-
-# Copiar headers
-cp -r /usr/local/include/tensorflow/lite "$PACKAGE_DIR/include/"
-
-# Criar tar.gz
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-TARBALL="$OUTPUT_DIR/tflite_build_${TIMESTAMP}.tar.gz"
+TARBALL="$OUTPUT_DIR/tflite_build_${TF_VERSION}_$(date +%Y%m%d_%H%M%S).tar.gz"
 cd "$PACKAGE_DIR"
-tar -czf "$TARBALL" lib/ include/
-
-# Limpeza
+tar -czf "$TARBALL" lib include
 rm -rf "$PACKAGE_DIR"
+rm -rf "$WORKDIR"
 
-echo "✓ Arquivo tar.gz criado: $TARBALL"
-
+echo "✓ Created package: $TARBALL"
 echo "-------------------------------------------------------"
-echo " INSTALAÇÃO CONCLUÍDA COM SUCESSO! "
+echo " TensorFlow Lite C install completed successfully. "
 echo "-------------------------------------------------------"

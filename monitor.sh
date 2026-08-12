@@ -6,9 +6,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/config.sh"
 
-BASE_LOGS_DIR="${LOGS_DIR}"
+RUN_MODE="${RUN_MODE:-standalone}"
 RUN_COUNT="${RUN_COUNT:-1}"
-MONITOR_LOG="${BASE_LOGS_DIR}/monitor.log"
+CURRENT_MODE="$RUN_MODE"
+MONITOR_LOG="${LOGS_DIR}/monitor.log"
 
 log_info() {
     local msg="$1"
@@ -25,8 +26,27 @@ log_error() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $msg" | tee -a "$MONITOR_LOG" >&2
 }
 
+backup_and_clear_logs() {
+    mkdir -p "$LOGS_DIR"
+
+    if [ -z "$(find "$LOGS_DIR" -mindepth 1 2>/dev/null | head -n 1)" ]; then
+        log_info "No existing logs to backup in $LOGS_DIR"
+        return 0
+    fi
+
+    local timestamp backup_file
+    timestamp="$(date '+%Y%m%d_%H%M%S')"
+    backup_file="${LOGS_DIR}/backup_${timestamp}.tar.xz"
+
+    log_info "Backing up existing logs from $LOGS_DIR to $backup_file"
+    tar --exclude="$(basename "$backup_file")" -C "$LOGS_DIR" -cJf "$backup_file" .
+
+    find "$LOGS_DIR" -mindepth 1 -maxdepth 1 ! -name "$(basename "$backup_file")" -exec rm -rf {} +
+    log_info "Cleaned existing logs from $LOGS_DIR"
+}
+
 stop_docker_runtime() {
-    if [ "$RUN_MODE" != "standalone" ]; then
+    if [ "$CURRENT_MODE" != "standalone" ]; then
         return 0
     fi
 
@@ -43,7 +63,7 @@ stop_docker_runtime() {
 }
 
 stop_services() {
-    if [ "$RUN_MODE" = "container" ]; then
+    if [ "$CURRENT_MODE" = "container" ]; then
         if [ -f "$CLASSIFIER_PID_FILE" ] || [ -f "$CAMERA_PID_FILE" ]; then
             docker compose -f "$CONTAINER_COMPOSE_FILE" down 2>/dev/null || true
         fi
@@ -92,7 +112,7 @@ trap cleanup EXIT INT TERM
 check_prerequisites() {
     log_info "Running pre-flight checks..."
 
-    if [ "$RUN_MODE" = "standalone" ]; then
+    if [ "$CURRENT_MODE" = "standalone" ]; then
         if [ ! -f "$CLASSIFIER_BIN" ]; then
             log_error "Classifier binary not found: $CLASSIFIER_BIN"
             exit 1
@@ -152,7 +172,7 @@ start_services() {
     log_info "  - Camera Stats: $CAMERA_METRICS_NAME"
     log_info "  - Classifier Stats: $CLASSIFIER_METRICS_NAME"
 
-    if [ "$RUN_MODE" = "standalone" ]; then
+    if [ "$CURRENT_MODE" = "standalone" ]; then
         log_info "Starting standalone services"
         stop_docker_runtime
         cd "$SCRIPT_DIR"
@@ -246,7 +266,7 @@ start_services() {
 }
 
 wait_for_camera_completion() {
-    if [ "$RUN_MODE" = "standalone" ]; then
+    if [ "$CURRENT_MODE" = "standalone" ]; then
         if wait "$CAMERA_PID" 2>/dev/null; then
             log_info "Camera simulator completed successfully"
         else
@@ -270,23 +290,48 @@ wait_for_camera_completion() {
 }
 
 main() {
-    mkdir -p "$BASE_LOGS_DIR"
-
     if ! [[ "$RUN_COUNT" =~ ^[1-9][0-9]*$ ]]; then
         log_error "RUN_COUNT must be a positive integer; defaulting to 1"
         RUN_COUNT=1
     fi
 
-    for RUN_INDEX in $(seq 1 "$RUN_COUNT"); do
-        RUN_LOGS_DIR="${BASE_LOGS_DIR}/run_${RUN_INDEX}"
+    if [[ "$RUN_MODE" != "standalone" && "$RUN_MODE" != "container" && "$RUN_MODE" != "both" ]]; then
+        log_warn "Unsupported RUN_MODE '$RUN_MODE'; defaulting to standalone"
+        RUN_MODE="standalone"
+    fi
+
+    backup_and_clear_logs
+
+    if [ "$RUN_MODE" = "both" ]; then
+        TOTAL_RUNS=$((RUN_COUNT * 2))
+    else
+        TOTAL_RUNS=$RUN_COUNT
+    fi
+
+    for RUN_INDEX in $(seq 1 "$TOTAL_RUNS"); do
+        if [ "$RUN_MODE" = "both" ]; then
+            if [ "$RUN_INDEX" -le "$RUN_COUNT" ]; then
+                CURRENT_MODE="standalone"
+                MODE_RUN_INDEX="$RUN_INDEX"
+            else
+                CURRENT_MODE="container"
+                MODE_RUN_INDEX="$((RUN_INDEX - RUN_COUNT))"
+            fi
+        else
+            CURRENT_MODE="$RUN_MODE"
+            MODE_RUN_INDEX="$RUN_INDEX"
+        fi
+
+        BASE_LOGS_DIR="${LOGS_DIR}/${CURRENT_MODE}"
+        RUN_LOGS_DIR="${BASE_LOGS_DIR}/run_${MODE_RUN_INDEX}"
         mkdir -p "$RUN_LOGS_DIR"
         MONITOR_LOG="${RUN_LOGS_DIR}/monitor.log"
         : > "$MONITOR_LOG"
 
         log_info "=========================================="
         log_info "Performance Monitoring System"
-        log_info "RUN_MODE=$RUN_MODE"
-        log_info "RUN=${RUN_INDEX}/${RUN_COUNT}"
+        log_info "RUN_MODE=$CURRENT_MODE"
+        log_info "RUN=${MODE_RUN_INDEX}/${RUN_COUNT}"
         log_info "LOG_DIR=${RUN_LOGS_DIR}"
         log_info "=========================================="
 
@@ -296,12 +341,21 @@ main() {
         stop_services
 
         log_info "=========================================="
-        log_info "Run ${RUN_INDEX}/${RUN_COUNT} complete - logs stored in ${RUN_LOGS_DIR}"
+        log_info "Run ${MODE_RUN_INDEX}/${RUN_COUNT} complete for ${CURRENT_MODE} - logs stored in ${RUN_LOGS_DIR}"
         log_info "=========================================="
 
-        if [ "$RUN_INDEX" -lt "$RUN_COUNT" ]; then
-            log_info "Starting next run in 2s..."
-            sleep 2
+        if [ "$RUN_INDEX" -lt "$TOTAL_RUNS" ]; then
+            log_info "Cleaning system caches before next run..."
+            if [ -w /proc/sys/vm/drop_caches ]; then
+                sync
+                echo 3 > /proc/sys/vm/drop_caches
+                log_info "System page cache, dentries, and inodes dropped"
+            else
+                log_warn "/proc/sys/vm/drop_caches is not writable; cache cleanup skipped"
+            fi
+
+            log_info "Cooling down for 5 minutes before next run..."
+            sleep 300
         fi
     done
 

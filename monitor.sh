@@ -25,6 +25,23 @@ log_error() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $msg" | tee -a "$MONITOR_LOG" >&2
 }
 
+stop_docker_runtime() {
+    if [ "$RUN_MODE" != "standalone" ]; then
+        return 0
+    fi
+
+    if ! command -v systemctl > /dev/null 2>&1; then
+        return 0
+    fi
+
+    for svc in docker.service containerd.service; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            log_info "Stopping $svc for standalone mode..."
+            systemctl stop "$svc" 2>/dev/null || true
+        fi
+    done
+}
+
 stop_services() {
     if [ "$RUN_MODE" = "container" ]; then
         if [ -f "$CLASSIFIER_PID_FILE" ] || [ -f "$CAMERA_PID_FILE" ]; then
@@ -48,6 +65,8 @@ stop_services() {
                 kill -9 "$CAMERA_PID" 2>/dev/null || true
             fi
         fi
+
+        stop_docker_runtime
     fi
 
     for pid_var in CLS_SAMPLER_PID CAM_SAMPLER_PID CLS2_SAMPLER_PID CAM2_SAMPLER_PID DOCKERD_SAMPLER_PID CONTAINERD_SAMPLER_PID; do
@@ -135,6 +154,7 @@ start_services() {
 
     if [ "$RUN_MODE" = "standalone" ]; then
         log_info "Starting standalone services"
+        stop_docker_runtime
         cd "$SCRIPT_DIR"
 
         "$CLASSIFIER_BIN" "$RUN_DIR" "$MODEL_PATH" "$SERVER_PORT" > /dev/null 2>&1 &
@@ -154,6 +174,11 @@ start_services() {
         "$METRICS_BIN" "$CAMERA_PID" "$SAMPLE_INTERVAL_MS" "$CAMERA_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
         CAM_SAMPLER_PID=$!
         log_info "Camera metrics started (PID: $CAM_SAMPLER_PID)"
+
+        "$METRICS_BIN" 0 "$SAMPLE_INTERVAL_MS" "$SYSTEM_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
+        SYSTEM_SAMPLER_PID=$!
+        log_info "System metrics started (PID: $SYSTEM_SAMPLER_PID)"
+
     else
         log_info "Starting containerized services"
         cd "$SCRIPT_DIR"
@@ -204,6 +229,11 @@ start_services() {
             CONTAINERD_SAMPLER_PID=$!
             log_info "Containerd metrics started (PID: $CONTAINERD_PID, Sampler: $CONTAINERD_SAMPLER_PID)"
         fi
+
+        "$METRICS_BIN" 0 "$SAMPLE_INTERVAL_MS" "$SYSTEM_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
+        SYSTEM_SAMPLER_PID=$!
+        log_info "System metrics started (PID: $SYSTEM_SAMPLER_PID)"
+
     fi
 
     log_info "=========================================="

@@ -25,6 +25,7 @@ CAMERA_METRICS_NAME="camera"
 CLASSIFIER_METRICS_NAME="classifier"
 DOCKERD_METRICS_NAME="dockerd"
 CONTAINERD_METRICS_NAME="containerd"
+SYSTEM_METRICS_NAME="system"
 MONITOR_LOG="${LOGS_DIR}/monitor.log"
 MODEL_PATH="${SCRIPT_DIR}/bin/model.tflite"
 

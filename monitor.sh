@@ -34,14 +34,17 @@ backup_and_clear_logs() {
         return 0
     fi
 
-    local timestamp backup_file
+    local timestamp backup_file backup_dir
     timestamp="$(date '+%Y%m%d_%H%M%S')"
-    backup_file="${LOGS_DIR}/backup_${timestamp}.tar.xz"
+    backup_dir="$(dirname "$LOGS_DIR")"
+    backup_file="${backup_dir}/backup_${timestamp}.tar.xz"
 
     log_info "Backing up existing logs from $LOGS_DIR to $backup_file"
-    tar --exclude="$(basename "$backup_file")" -C "$LOGS_DIR" -cJf "$backup_file" .
+    # Create the archive outside of $LOGS_DIR to avoid tar reading a file that's being written
+    tar -C "$LOGS_DIR" -cJf "$backup_file" .
 
-    find "$LOGS_DIR" -mindepth 1 -maxdepth 1 ! -name "$(basename "$backup_file")" -exec rm -rf {} +
+    # Remove everything under LOGS_DIR after backup
+    find "$LOGS_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
     log_info "Cleaned existing logs from $LOGS_DIR"
 }
 
@@ -156,8 +159,8 @@ start_services() {
     export HOST_LOGS_DIR="$RUN_DIR"
     export HOST_MODEL_PATH="$MODEL_PATH"
     export HOST_DATASET_PATH="$IMAGE_DATASET_PATH"
-    export CONTAINER_CLASSIFIER_LOG_DIR="$RUN_DIR"
-    export CONTAINER_CAMERA_LOG_DIR="$RUN_DIR"
+    export CONTAINER_CLASSIFIER_LOG_DIR="/var/log/"
+    export CONTAINER_CAMERA_LOG_DIR="/var/log/"
     export CONTAINER_MODEL_PATH="$CONTAINER_MODEL_PATH"
     export CONTAINER_DATASET_PATH="$CONTAINER_DATASET_PATH"
     export CONTAINER_SERVER_URL="$CONTAINER_SERVER_URL"

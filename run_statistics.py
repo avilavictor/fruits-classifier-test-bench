@@ -257,7 +257,49 @@ def between_runs_summary(run_values: dict[str, list[float]], dataset_type: str, 
     return rows
 
 
-def collect_run_summary(run_dir: Path) -> list[dict[str, object]]:
+def between_methods_summary(run_values_by_mode: dict[str, list[float]], dataset_type: str, source_file: str, metric_name: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+
+    # Compare only container vs standalone modes
+    values_a = pd.to_numeric(pd.Series(run_values_by_mode.get("container", [])), errors="coerce").dropna()
+    values_b = pd.to_numeric(pd.Series(run_values_by_mode.get("standalone", [])), errors="coerce").dropna()
+    if values_a.empty or values_b.empty:
+        return rows
+
+    if len(values_a) >= 2 and len(values_b) >= 2:
+        t_test = stats.ttest_ind(values_a, values_b, equal_var=False, nan_policy="omit")
+        mw = stats.mannwhitneyu(values_a, values_b, alternative="two-sided")
+        p_t = float(t_test.pvalue) if np.isfinite(t_test.pvalue) else np.nan
+        p_mw = float(mw.pvalue) if np.isfinite(mw.pvalue) else np.nan
+    else:
+        p_t = np.nan
+        p_mw = np.nan
+
+    rows.append({
+        "scope": "between_methods",
+        "comparison": "container_vs_standalone",
+        "run": "METHODS",
+        "dataset_type": dataset_type,
+        "source_file": source_file,
+        "metric_name": metric_name,
+        "n": int(len(values_a) + len(values_b)),
+        "mean": np.nan,
+        "std": np.nan,
+        "p50": np.nan,
+        "p90": np.nan,
+        "p95": np.nan,
+        "t_test_pvalue": p_t,
+        "mannwhitney_pvalue": p_mw,
+        "n_a": int(len(values_a)),
+        "n_b": int(len(values_b)),
+        "mean_a": float(values_a.mean()) if not values_a.empty else np.nan,
+        "mean_b": float(values_b.mean()) if not values_b.empty else np.nan,
+    })
+
+    return rows
+
+
+def collect_run_summary(run_dir: Path, mode: str) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
 
     metrics_files = sorted(run_dir.glob("*metrics.csv"))
@@ -267,6 +309,9 @@ def collect_run_summary(run_dir: Path) -> list[dict[str, object]]:
     event_rows = compile_run_timings(run_dir)
     rows.extend(event_rows)
 
+    # Attach mode to each row (e.g., 'container' or 'standalone') and normalize run name
+    for r in rows:
+        r["mode"] = mode
     return rows
 
 
@@ -281,24 +326,28 @@ def main() -> int:
         print(f"[ERROR] Logs directory not found: {logs_dir}", file=sys.stderr)
         return 1
 
-    run_dirs = sorted(path for path in logs_dir.iterdir() if path.is_dir() and path.name.startswith("run_"))
+    # Find runs under mode subdirectories (e.g. logs/container/run_1)
+    run_dirs = sorted(path for path in logs_dir.glob("*/run_*") if path.is_dir())
     if not run_dirs:
-        print(f"[ERROR] No run directories found under {logs_dir}", file=sys.stderr)
+        print(f"[ERROR] No run directories found under {logs_dir} (expected logs/<mode>/run_*)", file=sys.stderr)
         return 1
 
     run_rows: list[dict[str, object]] = []
     for run_dir in run_dirs:
-        print(f"[INFO] Processing {run_dir.name} ...")
-        run_rows.extend(collect_run_summary(run_dir))
+        mode = run_dir.parent.name
+        print(f"[INFO] Processing {mode}/{run_dir.name} ...")
+        run_rows.extend(collect_run_summary(run_dir, mode))
 
     if not run_rows:
         print(f"[ERROR] No metrics or event data found in {logs_dir}", file=sys.stderr)
         return 1
 
     grouped_by_key: dict[tuple[str, str, str], dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    grouped_by_key_modes: dict[tuple[str, str, str], dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for row in run_rows:
         key = (str(row["dataset_type"]), str(row["source_file"]), str(row["metric_name"]))
         grouped_by_key[key][str(row["run"])].append(float(row["mean"]))
+        grouped_by_key_modes[key][str(row.get("mode", ""))].append(float(row["mean"]))
 
     all_rows: list[dict[str, object]] = []
     all_rows.extend({
@@ -310,10 +359,20 @@ def main() -> int:
     for (dataset_type, source_file, metric_name), run_values in sorted(grouped_by_key.items()):
         all_rows.extend(between_runs_summary(run_values, dataset_type, source_file, metric_name))
 
+        # Add method-level (container vs standalone) comparison only for system_metrics.csv and timing metrics
+        key = (dataset_type, source_file, metric_name)
+        if (dataset_type == "metrics" and source_file == "system_metrics.csv") or (
+            dataset_type == "events" and metric_name in TIMING_METRICS
+        ):
+            mode_values = grouped_by_key_modes.get(key, {})
+            if mode_values:
+                all_rows.extend(between_methods_summary(mode_values, dataset_type, source_file, metric_name))
+
     df = pd.DataFrame(all_rows)
     output_path = Path(args.output) if args.output else logs_dir / "run_statistics_summary.csv"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_path, index=False, float_format="%.6f")
+    # Use semicolon as field separator and comma as decimal separator
+    df.to_csv(output_path, index=False, sep=';', decimal=',', float_format="%.6f")
 
     print(f"[OK] Summary CSV saved to {output_path}")
     print(f"    rows: {len(df)}")

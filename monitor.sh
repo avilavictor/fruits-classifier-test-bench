@@ -92,7 +92,7 @@ stop_services() {
         stop_docker_runtime
     fi
 
-    for pid_var in CLS_SAMPLER_PID CAM_SAMPLER_PID CLS2_SAMPLER_PID CAM2_SAMPLER_PID DOCKERD_SAMPLER_PID CONTAINERD_SAMPLER_PID; do
+    for pid_var in SYSTEM_SAMPLER_PID CLS_SAMPLER_PID CAM_SAMPLER_PID CLS2_SAMPLER_PID CAM2_SAMPLER_PID DOCKERD_SAMPLER_PID CONTAINERD_SAMPLER_PID; do
         eval "pid_value=\${${pid_var}:-}"
         if [ -n "$pid_value" ] && ps -p "$pid_value" > /dev/null 2>&1; then
             kill -TERM "$pid_value" 2>/dev/null || true
@@ -101,7 +101,7 @@ stop_services() {
     done
 
     rm -f "$CLASSIFIER_PID_FILE" "$CAMERA_PID_FILE"
-    unset CLASSIFIER_PID CAMERA_PID CLS_SAMPLER_PID CAM_SAMPLER_PID CLS2_SAMPLER_PID CAM2_SAMPLER_PID DOCKERD_SAMPLER_PID CONTAINERD_SAMPLER_PID
+    unset SYSTEM_SAMPLER_PID CLASSIFIER_PID CAMERA_PID CLS_SAMPLER_PID CAM_SAMPLER_PID CLS2_SAMPLER_PID CAM2_SAMPLER_PID DOCKERD_SAMPLER_PID CONTAINERD_SAMPLER_PID
 }
 
 cleanup() {
@@ -180,6 +180,10 @@ start_services() {
         stop_docker_runtime
         cd "$SCRIPT_DIR"
 
+        "$METRICS_BIN" 0 "$SAMPLE_INTERVAL_MS" "$SYSTEM_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
+        SYSTEM_SAMPLER_PID=$!
+        log_info "System metrics started (PID: $SYSTEM_SAMPLER_PID)"
+
         "$CLASSIFIER_BIN" "$RUN_DIR" "$MODEL_PATH" "$SERVER_PORT" > /dev/null 2>&1 &
         CLASSIFIER_PID=$!
         echo "$CLASSIFIER_PID" > "$CLASSIFIER_PID_FILE"
@@ -198,13 +202,13 @@ start_services() {
         CAM_SAMPLER_PID=$!
         log_info "Camera metrics started (PID: $CAM_SAMPLER_PID)"
 
-        "$METRICS_BIN" 0 "$SAMPLE_INTERVAL_MS" "$SYSTEM_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-        SYSTEM_SAMPLER_PID=$!
-        log_info "System metrics started (PID: $SYSTEM_SAMPLER_PID)"
-
     else
         log_info "Starting containerized services"
         cd "$SCRIPT_DIR"
+
+        "$METRICS_BIN" 0 "$SAMPLE_INTERVAL_MS" "$SYSTEM_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
+        SYSTEM_SAMPLER_PID=$!
+        log_info "System metrics started (PID: $SYSTEM_SAMPLER_PID)"        
 
         docker compose -f "$CONTAINER_COMPOSE_FILE" up --build -d
 
@@ -253,10 +257,6 @@ start_services() {
             log_info "Containerd metrics started (PID: $CONTAINERD_PID, Sampler: $CONTAINERD_SAMPLER_PID)"
         fi
 
-        "$METRICS_BIN" 0 "$SAMPLE_INTERVAL_MS" "$SYSTEM_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-        SYSTEM_SAMPLER_PID=$!
-        log_info "System metrics started (PID: $SYSTEM_SAMPLER_PID)"
-
     fi
 
     log_info "=========================================="
@@ -304,6 +304,8 @@ main() {
     fi
 
     backup_and_clear_logs
+
+    sudo cpufreq-set -g performance
 
     if [ "$RUN_MODE" = "both" ]; then
         TOTAL_RUNS=$((RUN_COUNT * 2))

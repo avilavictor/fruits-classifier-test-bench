@@ -74,8 +74,10 @@ stop_services() {
         if [ -n "${CLASSIFIER_PID:-}" ] && ps -p "$CLASSIFIER_PID" > /dev/null 2>&1; then
             log_info "Stopping classifier (PID: $CLASSIFIER_PID)..."
             kill -TERM "$CLASSIFIER_PID" 2>/dev/null || true
-            sleep 1
+            # Give signal handler time to cleanup (close port, flush logs, etc.)
+            sleep 3
             if ps -p "$CLASSIFIER_PID" > /dev/null 2>&1; then
+                log_warn "Classifier did not stop gracefully, forcing shutdown..."
                 kill -9 "$CLASSIFIER_PID" 2>/dev/null || true
             fi
         fi
@@ -83,8 +85,10 @@ stop_services() {
         if [ -n "${CAMERA_PID:-}" ] && ps -p "$CAMERA_PID" > /dev/null 2>&1; then
             log_info "Stopping camera simulator (PID: $CAMERA_PID)..."
             kill -TERM "$CAMERA_PID" 2>/dev/null || true
-            sleep 1
+            # Give process time to cleanup gracefully
+            sleep 2
             if ps -p "$CAMERA_PID" > /dev/null 2>&1; then
+                log_warn "Camera simulator did not stop gracefully, forcing shutdown..."
                 kill -9 "$CAMERA_PID" 2>/dev/null || true
             fi
         fi

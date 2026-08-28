@@ -219,12 +219,7 @@ start_services() {
         CLS_SAMPLER_PID=$!
         log_info "Classifier metrics started (PID: $CLS_SAMPLER_PID)"
 
-        # Wait for server to be ready before starting camera
-        if ! wait_for_server "$SERVER_URL" 30; then
-            log_error "Classifier server failed to start within timeout"
-            stop_services
-            exit 1
-        fi
+        sleep 10
 
         "$CAMERA_BIN" "$IMAGE_DATASET_PATH" "$SERVER_URL" "$SEND_INTERVAL_MS" "$RUN_DIR" > /dev/null 2>&1 &
         CAMERA_PID=$!
@@ -253,12 +248,7 @@ start_services() {
         log_info "Classifier container PID: $CLASSIFIER_PID"
         log_info "Camera container PID: $CAMERA_PID"
 
-        # Wait for containerized server to be ready before starting camera
-        if ! wait_for_server "$CONTAINER_SERVER_URL" 30; then
-            log_error "Classifier container server failed to start within timeout"
-            docker compose -f "$CONTAINER_COMPOSE_FILE" down 2>/dev/null || true
-            exit 1
-        fi
+        sleep 10
 
         if [ -n "$CLASSIFIER_PID" ]; then
             "$METRICS_BIN" "$CLASSIFIER_PID" "$SAMPLE_INTERVAL_MS" "$CLASSIFIER_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &

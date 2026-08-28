@@ -147,7 +147,7 @@ check_prerequisites() {
         fi
     fi
 
-    for cmd in ps awk grep sed wc; do
+    for cmd in ps awk grep sed wc curl; do
         if ! command -v "$cmd" &> /dev/null; then
             log_error "Required command not found: $cmd"
             exit 1
@@ -155,6 +155,28 @@ check_prerequisites() {
     done
 
     log_info "Pre-flight checks passed"
+}
+
+wait_for_server() {
+    local server_url="$1"
+    local max_wait="${2:-30}"  # Default 30 seconds timeout
+    local elapsed=0
+    local interval=1  # Check every 1 second
+    
+    log_info "Waiting for server to be ready at $server_url (timeout: ${max_wait}s)..."
+    
+    while [ "$elapsed" -lt "$max_wait" ]; do
+        if curl -s -f -m 2 "$server_url" > /dev/null 2>&1; then
+            log_info "Server is ready!"
+            return 0
+        fi
+        
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+    
+    log_error "Server did not become ready within ${max_wait}s"
+    return 1
 }
 
 start_services() {
@@ -197,6 +219,13 @@ start_services() {
         CLS_SAMPLER_PID=$!
         log_info "Classifier metrics started (PID: $CLS_SAMPLER_PID)"
 
+        # Wait for server to be ready before starting camera
+        if ! wait_for_server "$SERVER_URL" 30; then
+            log_error "Classifier server failed to start within timeout"
+            stop_services
+            exit 1
+        fi
+
         "$CAMERA_BIN" "$IMAGE_DATASET_PATH" "$SERVER_URL" "$SEND_INTERVAL_MS" "$RUN_DIR" > /dev/null 2>&1 &
         CAMERA_PID=$!
         echo "$CAMERA_PID" > "$CAMERA_PID_FILE"
@@ -223,6 +252,13 @@ start_services() {
         echo "$CAMERA_PID" > "$CAMERA_PID_FILE"
         log_info "Classifier container PID: $CLASSIFIER_PID"
         log_info "Camera container PID: $CAMERA_PID"
+
+        # Wait for containerized server to be ready before starting camera
+        if ! wait_for_server "$CONTAINER_SERVER_URL" 30; then
+            log_error "Classifier container server failed to start within timeout"
+            docker compose -f "$CONTAINER_COMPOSE_FILE" down 2>/dev/null || true
+            exit 1
+        fi
 
         if [ -n "$CLASSIFIER_PID" ]; then
             "$METRICS_BIN" "$CLASSIFIER_PID" "$SAMPLE_INTERVAL_MS" "$CLASSIFIER_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &

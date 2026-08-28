@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from scipy.stats import ttest_ind
+from scipy.stats import ttest_ind, mannwhitneyu, shapiro
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -186,23 +186,23 @@ def build_overall_table(metrics_statistics, events_statistics):
     )
 
     values = pd.DataFrame({
-        'Metric': ['CPU percent', 'Total RAM (MB)', 'Processing time (ms)'],
-        ('Average', 'standalone'): [
+        'Métrica': ['Percentual de CPU', 'Memória RAM (MB)', 'Tempo de processamento (ms)'],
+        ('Média', 'Nativo'): [
             metrics_by_method.loc['standalone', 'cpu_average'],
             metrics_by_method.loc['standalone', 'ram_average'],
             processing_by_method.loc['standalone', 'processing_average']
         ],
-        ('Std Dev', 'standalone'): [
+        ('Desvio Padrão', 'Nativo'): [
             metrics_by_method.loc['standalone', 'cpu_std_dev'],
             metrics_by_method.loc['standalone', 'ram_std_dev'],
             processing_by_method.loc['standalone', 'processing_std_dev']
         ],
-        ('Average', 'docker'): [
+        ('Média', 'Docker'): [
             metrics_by_method.loc['container', 'cpu_average'],
             metrics_by_method.loc['container', 'ram_average'],
             processing_by_method.loc['container', 'processing_average']
         ],
-        ('Std Dev', 'docker'): [
+        ('Desvio Padrão', 'Docker'): [
             metrics_by_method.loc['container', 'cpu_std_dev'],
             metrics_by_method.loc['container', 'ram_std_dev'],
             processing_by_method.loc['container', 'processing_std_dev']
@@ -210,30 +210,30 @@ def build_overall_table(metrics_statistics, events_statistics):
     })
 
     values.columns = pd.MultiIndex.from_tuples([
-        ('Metric', ''),
-        ('Average', 'standalone'),
-        ('Std Dev', 'standalone'),
-        ('Average', 'docker'),
-        ('Std Dev', 'docker')
+        ('Métrica', ''),
+        ('Média', 'Nativo'),
+        ('Desvio Padrão', 'Nativo'),
+        ('Média', 'Docker'),
+        ('Desvio Padrão', 'Docker')
     ])
 
-    values[('Absolute Overhead', '')] = (
-        values[('Average', 'docker')] - values[('Average', 'standalone')]
+    values[('Overhead absoluto', '')] = (
+        values[('Média', 'Docker')] - values[('Média', 'Nativo')]
     )
-    values[('Relative Overhead (%)', '')] = (
-        values[('Absolute Overhead', '')]
-        / values[('Average', 'standalone')]
+    values[('Overhead relativo (%)', '')] = (
+        values[('Overhead absoluto', '')]
+        / values[('Média', 'Nativo')]
         * 100
     )
 
     values.columns = [
-        'Metric',
-        'Standalone Average',
-        'Standalone Std Dev',
-        'Docker Average',
-        'Docker Std Dev',
-        'Absolute Overhead',
-        'Relative Overhead (%)'
+        'Métrica',
+        'Média',
+        'Desvio Padrão',
+        'Média',
+        'Desvio Padrão',
+        'Overhead absoluto',
+        'Overhead relativo (%)'
     ]
     return values
 
@@ -261,7 +261,7 @@ def build_application_table(metrics_statistics):
 
     values = pd.DataFrame({
         'Aplicação': ['Simulador de Câmera', 'Classificador', 'Simulador de Câmera (shim)', 'Classificador (shim)', 'Dockerd', 'containerd'],
-        ('Uso de CPU (%)', 'Standalone'): [
+        ('Uso de CPU (%)', 'Nativo'): [
             grouped.loc[('standalone', 'camera'), 'cpu_average'],
             grouped.loc[('standalone', 'classifier'), 'cpu_average'],
             grouped.loc[('standalone', 'camera_shim'), 'cpu_average'],
@@ -269,7 +269,7 @@ def build_application_table(metrics_statistics):
             grouped.loc[('standalone', 'dockerd'), 'cpu_average'],
             grouped.loc[('standalone', 'containerd'), 'cpu_average'],
         ],
-        ('Uso de RAM (MB)', 'Standalone'): [
+        ('Uso de RAM (MB)', 'Nativo'): [
             grouped.loc[('standalone', 'camera'), 'ram_average'],
             grouped.loc[('standalone', 'classifier'), 'ram_average'],
             grouped.loc[('standalone', 'camera_shim'), 'ram_average'],
@@ -297,8 +297,8 @@ def build_application_table(metrics_statistics):
 
     values.columns = pd.MultiIndex.from_tuples([
         ('Aplicação', ''),
-        ('Uso de CPU (%)', 'Standalone'),
-        ('Uso de RAM (MB)', 'Standalone'),
+        ('Uso de CPU (%)', 'Nativo'),
+        ('Uso de RAM (MB)', 'Nativo'),
         ('Uso de CPU (%)', 'Docker'),
         ('Uso de RAM (MB)', 'Docker')
     ])
@@ -311,7 +311,7 @@ def calculate_p_value(df_metrics, df_events):
     ]
 
     comparisons = {
-        'CPU percent': (
+        'Percentual de CPU': (
             system_metrics.loc[
                 system_metrics['method'] == 'standalone',
                 'cpu_percent_mean'
@@ -321,7 +321,7 @@ def calculate_p_value(df_metrics, df_events):
                 'cpu_percent_mean'
             ]
         ),
-        'Total RAM (MB)': (
+        'Memórica RAM': (
             system_metrics.loc[
                 system_metrics['method'] == 'standalone',
                 'memory_mb_mean'
@@ -331,7 +331,7 @@ def calculate_p_value(df_metrics, df_events):
                 'memory_mb_mean'
             ]
         ),
-        'Processing time (ms)': (
+        'Tempo de processamento (ms)': (
             df_events.loc[
                 df_events['method'] == 'standalone',
                 'total_time_mean'
@@ -345,12 +345,28 @@ def calculate_p_value(df_metrics, df_events):
 
     p_values = []
     for metric, (standalone, container) in comparisons.items():
-        _, p_value = ttest_ind(
-            standalone.dropna(),
-            container.dropna(),
-            equal_var=False
-        )
-        p_values.append({'Metric': metric, 'p-value': p_value})
+        # Limpeza dos dados
+        data_std = standalone.dropna()
+        data_cnt = container.dropna()
+
+        # 1. Testa a normalidade dos dois grupos usando Shapiro-Wilk
+        _, p_norm_std = shapiro(data_std)
+        _, p_norm_cnt = shapiro(data_cnt)
+
+        # A premissa do Teste t exige que AMBOS os grupos sejam normais
+        if p_norm_std > 0.05 and p_norm_cnt > 0.05:
+            # Grupos normais -> Teste paramétrico
+            teste_usado = 'Teste t (Welch)'
+            _, p_value = ttest_ind(data_std, data_cnt, equal_var=False)
+        else:
+            # Pelo menos um grupo não é normal -> Teste não-paramétrico
+            teste_usado = 'Mann-Whitney'
+            _, p_value = mannwhitneyu(data_std, data_cnt, alternative='two-sided')
+
+        p_values.append({
+            'Métrica': metric,
+            'p-valor': p_value
+        })
 
     return pd.DataFrame(p_values)
 
@@ -365,7 +381,7 @@ def generate_memory_graph(df_metrics, output_path, time_bin_seconds=1.0):
         ['method', 'run', 'time_bin'],
         as_index=False
     )['memory_mb'].mean()
-    memory_data['method'] = memory_data['method'].replace({
+    memory_data['Método'] = memory_data['method'].replace({
         'container': 'Docker',
         'standalone': 'Standalone'
     })
@@ -375,14 +391,16 @@ def generate_memory_graph(df_metrics, output_path, time_bin_seconds=1.0):
         data=memory_data,
         x='time_bin',
         y='memory_mb',
-        hue='method',
+        hue='Método',
         errorbar=('ci', 95),
         estimator='mean',
         ax=axis
     )
     axis.set_xlabel('Tempo de execução (s)')
     axis.set_ylabel('Uso de RAM (MB)')
-    axis.grid(True, alpha=0.3)
+    axis.set_xlim(left=0)
+    axis.set_ylim(bottom=0)
+    axis.grid(True)
     figure.tight_layout()
     figure.savefig(output_path, dpi=300)
     plt.close(figure)
@@ -400,7 +418,7 @@ def generate_cpu_graph(df_metrics, output_path, time_bin_seconds=1.0):
         ['method', 'run', 'time_bin'],
         as_index=False
     )['cpu_percent'].mean()
-    cpu_data['method'] = cpu_data['method'].replace({
+    cpu_data['Método'] = cpu_data['method'].replace({
         'container': 'Docker',
         'standalone': 'Standalone'
     })
@@ -410,19 +428,32 @@ def generate_cpu_graph(df_metrics, output_path, time_bin_seconds=1.0):
         data=cpu_data,
         x='time_bin',
         y='cpu_percent',
-        hue='method',
+        hue='Método',
         errorbar=('ci', 95),
         estimator='mean',
         ax=axis
     )
     axis.set_xlabel('Tempo de execução (s)')
     axis.set_ylabel('Uso de CPU (%)')
-    axis.grid(True, alpha=0.3)
+    axis.set_xlim(left=0)
+    axis.set_ylim(bottom=0)
+    axis.grid(True)
     figure.tight_layout()
     figure.savefig(output_path, dpi=300)
     plt.close(figure)
 
     return output_path
+
+def export_tables_to_markdown(tables, output_filename):
+    with output_filename.open('w', encoding='utf-8') as markdown_file:
+        markdown_file.write('# Tabelas de estatísticas\n\n')
+
+        for title, table in tables.items():
+            markdown_file.write(f'## {title}\n\n')
+            markdown_file.write(
+                table.to_markdown(index=False, floatfmt='.2f')
+            )
+            markdown_file.write('\n\n')
 
 def generate_cpu_temp_graph(df_metrics, output_path, time_bin_seconds=1.0):
     cpu_data = df_metrics[
@@ -435,7 +466,7 @@ def generate_cpu_temp_graph(df_metrics, output_path, time_bin_seconds=1.0):
         ['method', 'run', 'time_bin'],
         as_index=False
     )['cpu_temperature_c'].mean()
-    cpu_data['method'] = cpu_data['method'].replace({
+    cpu_data['Método'] = cpu_data['method'].replace({
         'container': 'Docker',
         'standalone': 'Standalone'
     })
@@ -445,14 +476,16 @@ def generate_cpu_temp_graph(df_metrics, output_path, time_bin_seconds=1.0):
         data=cpu_data,
         x='time_bin',
         y='cpu_temperature_c',
-        hue='method',
+        hue='Método',
         errorbar=('pi', 95),
         estimator='mean',
         ax=axis
     )
     axis.set_xlabel('Tempo de execução (s)')
     axis.set_ylabel('Temperatura da CPU (°C)')
-    axis.grid(True, alpha=0.3)
+    axis.set_xlim(left=0)
+    axis.set_ylim(bottom=0)
+    axis.grid(True)
     figure.tight_layout()
     figure.savefig(output_path, dpi=300)
     plt.close(figure)
@@ -470,7 +503,7 @@ def generate_cpu_freq_graph(df_metrics, output_path, time_bin_seconds=1.0):
         ['method', 'run', 'time_bin'],
         as_index=False
     )['cpu_frequency_khz'].mean()
-    cpu_data['method'] = cpu_data['method'].replace({
+    cpu_data['Método'] = cpu_data['method'].replace({
         'container': 'Docker',
         'standalone': 'Standalone'
     })
@@ -480,14 +513,95 @@ def generate_cpu_freq_graph(df_metrics, output_path, time_bin_seconds=1.0):
         data=cpu_data,
         x='time_bin',
         y='cpu_frequency_khz',
-        hue='method',
+        hue='Método',
         errorbar=('pi', 95),
         estimator='mean',
         ax=axis
     )
     axis.set_xlabel('Tempo de execução (s)')
     axis.set_ylabel('Frequência da CPU (kHz)')
-    axis.grid(True, alpha=0.3)
+    axis.set_xlim(left=0)
+    axis.set_ylim(bottom=0)
+    axis.grid(True)
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=300)
+    plt.close(figure)
+
+    return output_path
+
+def generate_application_boxplot(df_metrics, method, metric, output_path):
+    if method not in {'standalone', 'container'}:
+        raise ValueError("method deve ser 'standalone' ou 'container'")
+
+    if metric not in {'cpu_percent', 'memory_mb'}:
+        raise ValueError("metric deve ser 'cpu_percent' ou 'memory_mb'")
+
+    method_labels = {
+        'standalone': 'Nativo',
+        'container': 'Docker'
+    }
+    application_labels = {
+        'camera': 'Câmera',
+        'classifier': 'Classificador',
+        'camera_shim': 'Câmera (shim)',
+        'classifier_shim': 'Classificador (shim)',
+        'dockerd': 'Dockerd',
+        'containerd': 'containerd'
+    }
+    metric_labels = {
+        'cpu_percent': 'Uso de CPU (%)',
+        'memory_mb': 'Uso de RAM (MB)'
+    }
+    metric_title = {
+        'cpu_percent': 'CPU',
+        'memory_mb': 'RAM'
+    }
+
+    plot_data = df_metrics[
+        (df_metrics['method'] == method) &
+        (df_metrics['application'] != 'system')
+    ][['run', 'application', metric]].copy()
+
+    if plot_data.empty:
+        raise ValueError(f"Nenhum dado encontrado para o método '{method}'")
+
+    app_order = ['camera', 'classifier', 'camera_shim', 'classifier_shim', 'dockerd', 'containerd']
+    plot_data['application'] = plot_data['application'].map(application_labels)
+    plot_data = plot_data[plot_data['application'].notna()].copy()
+    plot_data['run'] = plot_data['run'].astype(int)
+
+    hue_order = [
+        application_labels[app]
+        for app in app_order
+        if app in df_metrics['application'].unique()
+    ]
+
+    figure, axis = plt.subplots(figsize=(12, 7))
+    sns.boxplot(
+        data=plot_data,
+        x='run',
+        y=metric,
+        hue='application',
+        order=sorted(plot_data['run'].unique()),
+        hue_order=hue_order,
+        dodge=True,
+        ax=axis,
+        width=0.5,
+        palette='Set2'
+    )
+
+    axis.set_xlabel('Execução')
+    axis.set_ylabel(metric_labels[metric])
+    axis.set_title(f"Consumo de {metric_title[metric]} - {method_labels[method]}")
+    axis.grid(True, axis='y', linestyle='--', alpha=0.5)
+    axis.tick_params(axis='x', rotation=0)
+
+    legend = axis.get_legend()
+    if legend is not None:
+        legend.set_title('Aplicação')
+        for text in legend.get_texts():
+            text.set_fontsize(10)
+
     figure.tight_layout()
     figure.savefig(output_path, dpi=300)
     plt.close(figure)
@@ -527,7 +641,15 @@ def main():
 
     p_values = calculate_p_value(metrics_statistics, events_statistics)
     output_filename = Path.joinpath(output_path, "3_p_values.csv")
-    p_values.to_csv(output_filename, sep=';', decimal=',', index=False, float_format='%.6f')
+    p_values.to_csv(output_filename, sep=';', decimal=',', index=False, float_format='%.5e')
+
+    tables = {
+        'Estatísticas gerais': overall_table,
+        'Estatísticas por aplicação': application_table,
+        'Valores de p': p_values
+    }
+    output_filename = Path.joinpath(output_path, 'tables.md')
+    export_tables_to_markdown(tables, output_filename)
 
     output_filename = Path.joinpath(output_path, "4_memory_graph.png")
     generate_memory_graph(df_metrics, output_filename)
@@ -538,8 +660,20 @@ def main():
     output_filename = Path.joinpath(output_path, "6_cpu_frequency_graph.png")
     generate_cpu_freq_graph(df_metrics, output_filename)
 
-    output_filename = Path.joinpath(output_path, "6_cpu_temperature_graph.png")
+    output_filename = Path.joinpath(output_path, "7_cpu_temperature_graph.png")
     generate_cpu_temp_graph(df_metrics, output_filename)
+
+    output_filename = Path.joinpath(output_path, "8_app_standalone_boxplot_cpu.png")
+    generate_application_boxplot(df_metrics, "standalone", "cpu_percent", output_filename)
+
+    output_filename = Path.joinpath(output_path, "9_app_container_boxplot_cpu.png")
+    generate_application_boxplot(df_metrics, "container", "cpu_percent", output_filename)
+
+    output_filename = Path.joinpath(output_path, "10_app_standalone_boxplot_ram.png")
+    generate_application_boxplot(df_metrics, "standalone", "memory_mb", output_filename)
+
+    output_filename = Path.joinpath(output_path, "11_app_container_boxplot_ram.png")
+    generate_application_boxplot(df_metrics, "container", "memory_mb", output_filename)
 
 if __name__ == "__main__":
     main()

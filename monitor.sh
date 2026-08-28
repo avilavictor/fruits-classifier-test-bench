@@ -305,8 +305,6 @@ main() {
 
     backup_and_clear_logs
 
-    sudo cpufreq-set -g performance
-
     if [ "$RUN_MODE" = "both" ]; then
         TOTAL_RUNS=$((RUN_COUNT * 2))
     else

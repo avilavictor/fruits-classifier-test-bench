@@ -388,7 +388,7 @@ main() {
             fi
 
             log_info "Cooling down for 5 minutes before next run..."
-            sleep 300
+            sleep "$COOLDOWN_TIME"
         fi
     done
 

@@ -8,6 +8,7 @@
 # ============================================================================
 # Supported values: standalone, container, both
 RUN_MODE="${RUN_MODE:-both}" 
+COOLDOWN_TIME="${COOLDOWN_TIME:-300}"  # Cooldown time in seconds between runs
 
 # ============================================================================
 # DIRECTORIES & PATHS

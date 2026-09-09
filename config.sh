@@ -56,7 +56,7 @@ SERVER_PORT=8000
 # ============================================================================
 # CAMERA CONFIGURATION
 # ============================================================================
-SEND_INTERVAL_MS=200  # Interval between sending images (in milliseconds)
+SEND_INTERVAL_MS=500  # Interval between sending images (in milliseconds)
 SERVER_URL="http://localhost:${SERVER_PORT}/upload"
 CONTAINER_SERVER_URL="http://classifier:${SERVER_PORT}/upload"
 

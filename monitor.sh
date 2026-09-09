@@ -96,7 +96,7 @@ stop_services() {
         stop_docker_runtime
     fi
 
-    for pid_var in SYSTEM_SAMPLER_PID CLS_SAMPLER_PID CAM_SAMPLER_PID CLS2_SAMPLER_PID CAM2_SAMPLER_PID DOCKERD_SAMPLER_PID CONTAINERD_SAMPLER_PID; do
+    for pid_var in SYSTEM_SAMPLER_PID PROCESS_SAMPLER_PID; do
         eval "pid_value=\${${pid_var}:-}"
         if [ -n "$pid_value" ] && ps -p "$pid_value" > /dev/null 2>&1; then
             kill -TERM "$pid_value" 2>/dev/null || true
@@ -105,7 +105,7 @@ stop_services() {
     done
 
     rm -f "$CLASSIFIER_PID_FILE" "$CAMERA_PID_FILE"
-    unset SYSTEM_SAMPLER_PID CLASSIFIER_PID CAMERA_PID CLS_SAMPLER_PID CAM_SAMPLER_PID CLS2_SAMPLER_PID CAM2_SAMPLER_PID DOCKERD_SAMPLER_PID CONTAINERD_SAMPLER_PID
+    unset SYSTEM_SAMPLER_PID PROCESS_SAMPLER_PID CLASSIFIER_PID CAMERA_PID
 }
 
 cleanup() {
@@ -215,10 +215,6 @@ start_services() {
         echo "$CLASSIFIER_PID" > "$CLASSIFIER_PID_FILE"
         log_info "Classifier started (PID: $CLASSIFIER_PID)"
 
-        "$METRICS_BIN" "$CLASSIFIER_PID" "$SAMPLE_INTERVAL_MS" "$CLASSIFIER_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-        CLS_SAMPLER_PID=$!
-        log_info "Classifier metrics started (PID: $CLS_SAMPLER_PID)"
-
         sleep 10
 
         "$CAMERA_BIN" "$IMAGE_DATASET_PATH" "$SERVER_URL" "$SEND_INTERVAL_MS" "$RUN_DIR" > /dev/null 2>&1 &
@@ -226,9 +222,11 @@ start_services() {
         echo "$CAMERA_PID" > "$CAMERA_PID_FILE"
         log_info "Camera simulator started (PID: $CAMERA_PID)"
 
-        "$METRICS_BIN" "$CAMERA_PID" "$SAMPLE_INTERVAL_MS" "$CAMERA_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-        CAM_SAMPLER_PID=$!
-        log_info "Camera metrics started (PID: $CAM_SAMPLER_PID)"
+        process_pids="$CLASSIFIER_PID,$CAMERA_PID"
+        process_names="$CLASSIFIER_METRICS_NAME,$CAMERA_METRICS_NAME"
+        "$METRICS_BIN" "$process_pids" "$SAMPLE_INTERVAL_MS" "$process_names" "$RUN_DIR" > /dev/null 2>&1 &
+        PROCESS_SAMPLER_PID=$!
+        log_info "Process metrics started (PIDs: $process_pids, Sampler: $PROCESS_SAMPLER_PID)"
 
     else
         log_info "Starting containerized services"
@@ -250,41 +248,62 @@ start_services() {
 
         sleep 10
 
+        process_pids=""
+        process_names=""
         if [ -n "$CLASSIFIER_PID" ]; then
-            "$METRICS_BIN" "$CLASSIFIER_PID" "$SAMPLE_INTERVAL_MS" "$CLASSIFIER_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-            CLS_SAMPLER_PID=$!
-            log_info "Classifier container metrics started (PID: $CLS_SAMPLER_PID)"
+            process_pids="$CLASSIFIER_PID"
+            process_names="$CLASSIFIER_METRICS_NAME"
 
             CLS_SHIM_PID=$(ps -o ppid= -p "$CLASSIFIER_PID" | tr -d ' ')
-            CLS_SHIM_METRICS_NAME="$CLASSIFIER_METRICS_NAME"_shim
-            "$METRICS_BIN" "$CLS_SHIM_PID" "$SAMPLE_INTERVAL_MS" "$CLS_SHIM_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-            CLS2_SAMPLER_PID=$!
-            log_info "Classifier shim metrics started (PID: $CLS2_SAMPLER_PID)"
+            if [ -n "$CLS_SHIM_PID" ]; then
+                CLS_SHIM_METRICS_NAME="$CLASSIFIER_METRICS_NAME"_shim
+                process_pids="$process_pids,$CLS_SHIM_PID"
+                process_names="$process_names,$CLS_SHIM_METRICS_NAME"
+            fi
         fi
         if [ -n "$CAMERA_PID" ]; then
-            "$METRICS_BIN" "$CAMERA_PID" "$SAMPLE_INTERVAL_MS" "$CAMERA_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-            CAM_SAMPLER_PID=$!
-            log_info "Camera container metrics started (PID: $CAM_SAMPLER_PID)"
+            if [ -n "$process_pids" ]; then
+                process_pids="$process_pids,$CAMERA_PID"
+                process_names="$process_names,$CAMERA_METRICS_NAME"
+            else
+                process_pids="$CAMERA_PID"
+                process_names="$CAMERA_METRICS_NAME"
+            fi
 
             CAM_SHIM_PID=$(ps -o ppid= -p "$CAMERA_PID" | tr -d ' ')
-            CAM_SHIM_METRICS_NAME="$CAMERA_METRICS_NAME"_shim
-            "$METRICS_BIN" "$CAM_SHIM_PID" "$SAMPLE_INTERVAL_MS" "$CAM_SHIM_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-            CAM2_SAMPLER_PID=$!
-            log_info "Camera shim metrics started (PID: $CAM2_SAMPLER_PID)"
+            if [ -n "$CAM_SHIM_PID" ]; then
+                CAM_SHIM_METRICS_NAME="$CAMERA_METRICS_NAME"_shim
+                process_pids="$process_pids,$CAM_SHIM_PID"
+                process_names="$process_names,$CAM_SHIM_METRICS_NAME"
+            fi
         fi
 
         DOCKERD_PID=$(systemctl show -p MainPID --value "docker.service")
         if [ -n "$DOCKERD_PID" ]; then
-            "$METRICS_BIN" "$DOCKERD_PID" "$SAMPLE_INTERVAL_MS" "$DOCKERD_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-            DOCKERD_SAMPLER_PID=$!
-            log_info "Dockerd metrics started (PID: $DOCKERD_PID, Sampler: $DOCKERD_SAMPLER_PID)"
+            if [ -n "$process_pids" ]; then
+                process_pids="$process_pids,$DOCKERD_PID"
+                process_names="$process_names,$DOCKERD_METRICS_NAME"
+            else
+                process_pids="$DOCKERD_PID"
+                process_names="$DOCKERD_METRICS_NAME"
+            fi
         fi
 
         CONTAINERD_PID=$(systemctl show -p MainPID --value "containerd.service")
         if [ -n "$CONTAINERD_PID" ]; then
-            "$METRICS_BIN" "$CONTAINERD_PID" "$SAMPLE_INTERVAL_MS" "$CONTAINERD_METRICS_NAME" "$RUN_DIR" > /dev/null 2>&1 &
-            CONTAINERD_SAMPLER_PID=$!
-            log_info "Containerd metrics started (PID: $CONTAINERD_PID, Sampler: $CONTAINERD_SAMPLER_PID)"
+            if [ -n "$process_pids" ]; then
+                process_pids="$process_pids,$CONTAINERD_PID"
+                process_names="$process_names,$CONTAINERD_METRICS_NAME"
+            else
+                process_pids="$CONTAINERD_PID"
+                process_names="$CONTAINERD_METRICS_NAME"
+            fi
+        fi
+
+        if [ -n "$process_pids" ]; then
+            "$METRICS_BIN" "$process_pids" "$SAMPLE_INTERVAL_MS" "$process_names" "$RUN_DIR" > /dev/null 2>&1 &
+            PROCESS_SAMPLER_PID=$!
+            log_info "Process metrics started (PIDs: $process_pids, Sampler: $PROCESS_SAMPLER_PID)"
         fi
 
     fi
@@ -292,9 +311,8 @@ start_services() {
     log_info "=========================================="
     log_info "System running - monitoring in progress"
     log_info "Classifier PID: $CLASSIFIER_PID"
-    log_info "Classifier Metrics PID: $CLS_SAMPLER_PID"
+    log_info "Process Metrics Sampler PID: $PROCESS_SAMPLER_PID"
     log_info "Camera PID: $CAMERA_PID"
-    log_info "Camera Metrics PID: $CAM_SAMPLER_PID"
     log_info "=========================================="
 }
 
